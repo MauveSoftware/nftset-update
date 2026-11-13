@@ -4,8 +4,14 @@ Makes the elements of an existing nftables interval set equal to a list of addre
 prefixes. It talks to nf_tables directly via netlink (`github.com/google/nftables`), with no
 `nft` CLI and no libnftables.
 
-It is built to replace the `nft` part of `update_blocklist.rb`. Fetching and consolidating the
-lists (`net-reduce`) stay in the calling script.
+Typical uses are blocklists or allowlists that are maintained elsewhere (APIs, threat feeds,
+inventories) and need to be kept in sync on many hosts. The tool follows the Unix philosophy:
+it only updates the set. Fetching, merging and consolidating the lists, as well as turning the
+report into metrics, are left to the caller.
+
+Updating sets via netlink avoids the fixed cost of the `nft` CLI, which loads the elements of
+all sets before every operation. With sets of several 100k elements this makes each `nft` call
+take seconds, while `nftset-update` applies small changes in milliseconds.
 
 ## Features
 
@@ -18,6 +24,28 @@ lists (`net-reduce`) stay in the calling script.
 - Strict input validation: nothing is changed if any input line is invalid.
 - Prints a JSON report to stdout for metrics; logs go to stderr.
 - Does not change the nftables structure. Tables, chains, rules and sets must already exist.
+
+## Prerequisites
+
+The table and the set must already exist; the tool never creates, changes or deletes tables,
+chains, rules or sets. The set must be an interval set of `ipv4_addr` or `ipv6_addr`, for
+example:
+
+```
+table inet filter {
+    set blocklist-v4 { type ipv4_addr; flags interval; }
+    set blocklist-v6 { type ipv6_addr; flags interval; }
+
+    chain input {
+        type filter hook input priority filter - 1; policy accept;
+        ip saddr @blocklist-v4 drop
+        ip6 saddr @blocklist-v6 drop
+    }
+}
+```
+
+The tool owns the set's elements: entries that are not in the input are removed on the next
+run, including entries added manually. Use a separate set for manual entries.
 
 ## Usage
 
@@ -47,6 +75,22 @@ Example:
 nftset-update -set blocklist-v4 -input /run/blocklist/v4.txt
 ```
 
+A typical caller (script, systemd timer, cron job) fetches the lists, consolidates them, writes
+the result completely to a file and then calls the tool:
+
+```sh
+#!/bin/sh
+set -eu
+list=$(mktemp)
+trap 'rm -f "$list"' EXIT
+
+curl -fsS https://example.com/blocklist-v4.txt | aggregate > "$list"
+nftset-update -set blocklist-v4 -input "$list" > report.json
+```
+
+Pass a complete file rather than a pipe: if the fetch fails halfway, the tool must not see a
+truncated list. The mass-removal guard is a second line of defence, not a replacement.
+
 ### Input format
 
 One IPv4/IPv6 address or CIDR prefix per line. Empty lines and lines starting with `#` are
@@ -58,8 +102,9 @@ any of these:
 - an entry of the wrong address family
 - overlapping or duplicate entries
 
-Each prefix is stored as one interval. Adjacent prefixes are not merged; consolidate the list
-before calling the tool (e.g. with `net-reduce`).
+Each prefix is stored as one interval. Adjacent prefixes are not merged and overlapping
+entries are rejected, so consolidate the list before calling the tool (e.g. with
+`aggregate`, `net-reduce` or `iprange`).
 
 ### Exit codes
 
@@ -73,7 +118,8 @@ before calling the tool (e.g. with `net-reduce`).
 
 ### Report
 
-After every run (except flag errors), one JSON object is written to stdout:
+After every run (except flag errors), one JSON object is written to stdout. It is meant to be
+turned into metrics by the caller (e.g. for the Prometheus node exporter textfile collector):
 
 ```json
 {"table":"inet filter","set":"blocklist-v4","afi":"v4","present":true,"success":true,
@@ -83,8 +129,28 @@ After every run (except flag errors), one JSON object is written to stdout:
  "content_hash":3735928559,"error":""}
 ```
 
-`content_hash` is a 32-bit FNV-1a hash of the set content after the run. Compare it across
-hosts to check that their sets are identical.
+| Field | Meaning |
+|---|---|
+| `present` | The set exists |
+| `success` / `exit_code` | Outcome of the run, see exit codes |
+| `input_intervals` | Intervals in the input |
+| `intervals_before` / `intervals_after` | Intervals in the set before and after the run |
+| `added` / `removed` | Intervals committed in this run |
+| `pending_adds` / `pending_removes` | Changes not applied (guard or error) |
+| `guard_tripped` | The mass-removal guard skipped the removals |
+| `transactions` | Committed netlink transactions |
+| `read_seconds` / `apply_seconds` / `duration_seconds` | Time spent reading the set, applying changes and in total |
+| `content_hash` | 32-bit FNV-1a hash of the set content after the run |
+| `error` | Error message, empty on success |
+
+Compare `content_hash` across hosts to check that their sets are identical.
+
+### Mass-removal guard
+
+If the set holds more than `-guard-min-elements` intervals and more than
+`-max-remove-fraction` of them would be removed, the removals are skipped and the tool exits
+with code 3. New entries are still added. An empty input never clears a non-empty set unless
+`-allow-empty` is given. The guard does not apply to an initially empty set.
 
 ## Requirements
 
@@ -98,8 +164,7 @@ make build
 ```
 
 This runs `CGO_ENABLED=0 go build -trimpath -ldflags='-s -w'` and produces a fully static
-binary with no libc dependency, so it runs on Ubuntu 22.04, 24.04 and other Linux
-distributions. Releases are built with goreleaser for amd64, arm and arm64.
+binary with no libc dependency, so it runs on any Linux distribution. Releases are built with goreleaser for amd64, arm and arm64.
 
 ## Test
 
