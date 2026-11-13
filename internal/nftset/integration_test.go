@@ -120,7 +120,7 @@ func (e *env) sync(name string, desired []interval.Interval) update.Result {
 		e.t.Fatalf("Read: %v", err)
 	}
 	plan := update.NewPlan(desired, current, updateConfig)
-	res, err := update.Apply(context.Background(), set, current, plan, updateConfig.BatchSize)
+	res, err := update.Apply(context.Background(), set, current, plan)
 	if err != nil {
 		e.t.Fatalf("Apply: %v", err)
 	}

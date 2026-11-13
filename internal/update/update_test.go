@@ -178,7 +178,7 @@ func TestApplyOrderAndBatching(t *testing.T) {
 	plan := NewPlan(desired, current, cfg)
 	target := &fakeTarget{}
 
-	res, err := Apply(context.Background(), target, current, plan, cfg.BatchSize)
+	res, err := Apply(context.Background(), target, current, plan)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestApplyGuardTrippedAppliesOnlyEarlyAdds(t *testing.T) {
 	}
 	target := &fakeTarget{}
 
-	res, err := Apply(context.Background(), target, current, plan, defaultConfig.BatchSize)
+	res, err := Apply(context.Background(), target, current, plan)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestApplyStopsOnTransactionError(t *testing.T) {
 	plan := NewPlan(desired, current, cfg)
 	target := &fakeTarget{failAt: 2}
 
-	res, err := Apply(context.Background(), target, current, plan, cfg.BatchSize)
+	res, err := Apply(context.Background(), target, current, plan)
 
 	var txErr *TransactionError
 	if !errors.As(err, &txErr) {
@@ -259,7 +259,7 @@ func TestApplyStopsWhenContextCancelled(t *testing.T) {
 	plan := NewPlan(hosts(5, 0), nil, defaultConfig)
 	target := &fakeTarget{}
 
-	res, err := Apply(ctx, target, nil, plan, defaultConfig.BatchSize)
+	res, err := Apply(ctx, target, nil, plan)
 
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("expected context.Canceled, got %v", err)
@@ -274,11 +274,34 @@ func TestApplyNoChanges(t *testing.T) {
 	plan := NewPlan(current, current, defaultConfig)
 	target := &fakeTarget{}
 
-	res, err := Apply(context.Background(), target, current, plan, defaultConfig.BatchSize)
+	res, err := Apply(context.Background(), target, current, plan)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(target.calls) != 0 || res.Transactions != 0 {
 		t.Errorf("expected no transactions, got %s", target.ops())
+	}
+}
+
+func TestApplyRejectsInvalidBatchSize(t *testing.T) {
+	for _, batchSize := range []int{0, -1} {
+		cfg := defaultConfig
+		cfg.BatchSize = batchSize
+		current := hosts(3, 1)
+		plan := NewPlan(hosts(3, 0), current, cfg)
+		target := &fakeTarget{}
+
+		res, err := Apply(context.Background(), target, current, plan)
+
+		if !errors.Is(err, ErrInvalidBatchSize) {
+			t.Errorf("batch size %d: expected ErrInvalidBatchSize, got %v", batchSize, err)
+		}
+		if len(target.calls) != 0 {
+			t.Errorf("batch size %d: expected no transactions, got %s", batchSize, target.ops())
+		}
+		if res.PendingAdds != 3 || res.PendingRemoves != 3 || len(res.State) != 3 {
+			t.Errorf("batch size %d: pendingAdds=%d pendingRemoves=%d state=%d, want 3/3/3 (nothing committed)",
+				batchSize, res.PendingAdds, res.PendingRemoves, len(res.State))
+		}
 	}
 }

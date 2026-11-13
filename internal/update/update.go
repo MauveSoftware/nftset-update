@@ -5,6 +5,7 @@ package update
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -29,6 +30,9 @@ type Target interface {
 	Delete(ivs []interval.Interval) error
 }
 
+// ErrInvalidBatchSize is returned by Apply if the plan's batch size is below 1.
+var ErrInvalidBatchSize = errors.New("batch size must be at least 1")
+
 // Config controls batching and the mass-removal guard.
 type Config struct {
 	BatchSize         int
@@ -38,11 +42,12 @@ type Config struct {
 }
 
 // Plan lists the changes per phase. If GuardTripped is set, only Early is
-// applied.
+// applied. BatchSize is the maximum number of intervals per transaction.
 type Plan struct {
 	Early        []interval.Interval
 	Removes      []interval.Interval
 	Late         []interval.Interval
+	BatchSize    int
 	GuardTripped bool
 	GuardReason  string
 }
@@ -51,7 +56,7 @@ type Plan struct {
 // mass-removal guard.
 func NewPlan(desired, current []interval.Interval, cfg Config) Plan {
 	adds, removes := interval.Diff(desired, current)
-	plan := Plan{Removes: removes}
+	plan := Plan{Removes: removes, BatchSize: cfg.BatchSize}
 	for _, add := range adds {
 		if overlapsAny(add, removes) {
 			plan.Late = append(plan.Late, add)
@@ -112,11 +117,11 @@ func (e *TransactionError) Unwrap() error {
 	return e.Err
 }
 
-// Apply executes the plan in batches of at most batchSize intervals per
+// Apply executes the plan in batches of at most plan.BatchSize intervals per
 // transaction. It stops at the first failed transaction or when ctx is
 // cancelled; the result then reflects the committed transactions only.
-func Apply(ctx context.Context, target Target, current []interval.Interval, plan Plan, batchSize int) (Result, error) {
-	a := applier{ctx: ctx, target: target, batchSize: batchSize}
+func Apply(ctx context.Context, target Target, current []interval.Interval, plan Plan) (Result, error) {
+	a := applier{ctx: ctx, target: target, batchSize: plan.BatchSize}
 	res := Result{GuardTripped: plan.GuardTripped}
 
 	err := a.run(PhaseAdd, plan.Early, target.Add)
@@ -146,6 +151,11 @@ type applier struct {
 }
 
 func (a *applier) run(phase Phase, ivs []interval.Interval, transaction func([]interval.Interval) error) error {
+	// Checked here rather than once in Apply so every phase is covered; a
+	// batch size below 1 would never advance the loop.
+	if a.batchSize < 1 {
+		return fmt.Errorf("%w, got %d", ErrInvalidBatchSize, a.batchSize)
+	}
 	for batch, start := 1, 0; start < len(ivs); batch, start = batch+1, start+a.batchSize {
 		if err := a.ctx.Err(); err != nil {
 			return err

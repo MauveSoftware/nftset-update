@@ -43,6 +43,17 @@ var tableFamilies = map[string]nftables.TableFamily{
 	"ip6":  nftables.TableFamilyIPv6,
 }
 
+// targetSet is the part of *nftset.Set used by execute.
+type targetSet interface {
+	update.Target
+	Is6() bool
+	Read() ([]interval.Interval, error)
+}
+
+// setOpener opens the set to update. The returned function releases the
+// underlying connection and is only valid if err is nil.
+type setOpener func(family nftables.TableFamily, table, name string) (set targetSet, closeSet func(), err error)
+
 type config struct {
 	set        string
 	input      string
@@ -72,7 +83,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	os.Exit(run(ctx, cfg, os.Stdout, logger))
+	os.Exit(run(ctx, cfg, openNetlinkSet, os.Stdout, logger))
 }
 
 func parseConfig(args []string, output io.Writer) (config, error) {
@@ -122,12 +133,12 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 }
 
 // run executes the update and always writes the report to stdout.
-func run(ctx context.Context, cfg config, stdout io.Writer, logger *slog.Logger) int {
+func run(ctx context.Context, cfg config, open setOpener, stdout io.Writer, logger *slog.Logger) int {
 	started := time.Now()
 	rep := &report.Report{Table: cfg.familyName + " " + cfg.table, Set: cfg.set}
 	logger = logger.With("table", rep.Table, "set", cfg.set)
 
-	code, err := execute(ctx, cfg, rep, logger)
+	code, err := execute(ctx, cfg, open, rep, logger)
 	if err != nil {
 		rep.Error = err.Error()
 		if code == exitGuardTripped {
@@ -146,20 +157,16 @@ func run(ctx context.Context, cfg config, stdout io.Writer, logger *slog.Logger)
 	return code
 }
 
-func execute(ctx context.Context, cfg config, rep *report.Report, logger *slog.Logger) (int, error) {
-	conn, err := nftset.Dial(0)
-	if err != nil {
-		return exitApplyError, fmt.Errorf("opening netlink connection: %w", err)
-	}
-	defer func() { _ = conn.CloseLasting() }()
-
-	set, err := nftset.Open(conn, cfg.family, cfg.table, cfg.set)
+func execute(ctx context.Context, cfg config, open setOpener, rep *report.Report, logger *slog.Logger) (int, error) {
+	set, closeSet, err := open(cfg.family, cfg.table, cfg.set)
 	if errors.Is(err, nftset.ErrNotFound) {
 		return exitSetMissing, err
 	}
 	if err != nil {
 		return exitApplyError, err
 	}
+	defer closeSet()
+
 	rep.Present = true
 	rep.AFI = "v4"
 	if set.Is6() {
@@ -183,7 +190,7 @@ func execute(ctx context.Context, cfg config, rep *report.Report, logger *slog.L
 
 	plan := update.NewPlan(desired, current, cfg.update)
 	applyStarted := time.Now()
-	res, err := update.Apply(ctx, set, current, plan, cfg.update.BatchSize)
+	res, err := update.Apply(ctx, set, current, plan)
 	rep.ApplySeconds = report.Seconds(time.Since(applyStarted))
 	rep.SetResult(res)
 	if err != nil {
@@ -195,6 +202,21 @@ func execute(ctx context.Context, cfg config, rep *report.Report, logger *slog.L
 		return exitGuardTripped, errors.New(plan.GuardReason)
 	}
 	return exitOK, nil
+}
+
+func openNetlinkSet(family nftables.TableFamily, table, name string) (targetSet, func(), error) {
+	conn, err := nftset.Dial(0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("opening netlink connection: %w", err)
+	}
+	closeConn := func() { _ = conn.CloseLasting() }
+
+	set, err := nftset.Open(conn, family, table, name)
+	if err != nil {
+		closeConn()
+		return nil, nil, err
+	}
+	return set, closeConn, nil
 }
 
 func readInput(path string, is6 bool) ([]interval.Interval, error) {
