@@ -94,7 +94,9 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 		return cfg, err
 	}
 	if *showVersion {
-		fmt.Fprintln(output, version)
+		if _, err := fmt.Fprintln(output, version); err != nil {
+			return cfg, err
+		}
 		return cfg, flag.ErrHelp
 	}
 
@@ -200,7 +202,8 @@ func readInput(path string, is6 bool) ([]interval.Interval, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	// Read-only file: a close error cannot lose data.
+	defer func() { _ = f.Close() }()
 
 	desired, err := prefixlist.Parse(f, is6)
 	if err != nil {

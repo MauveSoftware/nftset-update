@@ -135,7 +135,8 @@ func Hash(ivs []Interval) uint32 {
 	Sort(sorted)
 	h := fnv.New32a()
 	for _, iv := range sorted {
-		fmt.Fprintf(h, "%s-%s\n", iv.From, iv.To)
+		// Writing to a hash.Hash never returns an error.
+		_, _ = fmt.Fprintf(h, "%s-%s\n", iv.From, iv.To)
 	}
 	return h.Sum32()
 }
