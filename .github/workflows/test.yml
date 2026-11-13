@@ -14,3 +14,5 @@ permissions:
 jobs:
   test:
     uses: czerwonk/go-ci/.github/workflows/test.yml@v5
+    with:
+      platforms: '["ubuntu-latest"]'
