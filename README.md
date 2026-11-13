@@ -186,10 +186,20 @@ sets written by the `nft` CLI.
 
 ## Performance
 
-Reading the set from the kernel dominates a run with large sets: the kernel restarts its tree
-walk for every dump chunk. The tool makes the kernel use its maximum chunk size (32 KiB), which
-brings reading 200k intervals down from ~6 s to ~1.5 s. Applying a handful of changes takes
-well under 0.1 s; a full load of 200k intervals takes ~2 s.
+Measured in production on Ubuntu 22.04 (kernel 5.15) with ~214k intervals in an IPv4 set:
+
+| Operation | Time |
+|---|---|
+| Full load into an empty set (214k intervals, 22 transactions) | 1.3 s |
+| Reading the set | 3.0 s |
+| Applying a small delta (+2 / −14) | 0.2 s |
+
+For comparison, a full load with a single `nft -f` transaction took ~390 s on the same
+system, and every `nft` call cost 3–5 s even for single elements.
+
+Reading the set dominates a run with large sets: the kernel restarts its tree walk for every
+dump chunk. The tool makes the kernel use its maximum chunk size (32 KiB), which makes reading
+about 4× faster than with the default page-sized buffers.
 
 ## License
 
