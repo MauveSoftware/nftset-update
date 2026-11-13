@@ -198,7 +198,7 @@ func execute(ctx context.Context, cfg config, rep *report.Report, logger *slog.L
 }
 
 func readInput(path string, is6 bool) ([]interval.Interval, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- path is the operator-supplied -input flag
 	if err != nil {
 		return nil, err
 	}
