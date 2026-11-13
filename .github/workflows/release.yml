@@ -11,3 +11,5 @@ permissions:
 jobs:
   release:
     uses: czerwonk/go-ci/.github/workflows/release.yml@v5
+    with:
+      platforms: "[ubuntu-latest]"
