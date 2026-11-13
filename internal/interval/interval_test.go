@@ -44,7 +44,7 @@ func TestFromPrefix(t *testing.T) {
 }
 
 func TestParseRejectsInvalid(t *testing.T) {
-	for _, s := range []string{"", "x", "10.0.0.2-10.0.0.1", "10.0.0.1-::1", "10.0.0.1-"} {
+	for _, s := range []string{"", "x", "10.0.0.2-10.0.0.1", "10.0.0.1-::1", "10.0.0.1-", "fe80::1%eth0", "fe80::1-fe80::2%eth0"} {
 		if _, err := Parse(s); err == nil {
 			t.Errorf("Parse(%q) succeeded, want error", s)
 		}

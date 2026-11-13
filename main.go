@@ -26,7 +26,7 @@ import (
 
 var version = "dev"
 
-// Exit codes, see spec §6.
+// Exit codes are part of the operator interface, see README "Exit codes".
 const (
 	exitOK           = 0
 	exitApplyError   = 1
@@ -186,7 +186,6 @@ func execute(ctx context.Context, cfg config, open setOpener, rep *report.Report
 	}
 	rep.ReadSeconds = report.Seconds(time.Since(readStarted))
 	rep.IntervalsBefore = len(current)
-	rep.SetResult(update.Result{State: current})
 
 	plan := update.NewPlan(desired, current, cfg.update)
 	applyStarted := time.Now()
@@ -197,7 +196,7 @@ func execute(ctx context.Context, cfg config, open setOpener, rep *report.Report
 		return exitApplyError, err
 	}
 
-	logChanges(logger, rep)
+	logChanges(ctx, logger, rep)
 	if plan.GuardTripped {
 		return exitGuardTripped, errors.New(plan.GuardReason)
 	}
@@ -234,12 +233,12 @@ func readInput(path string, is6 bool) ([]interval.Interval, error) {
 	return desired, nil
 }
 
-func logChanges(logger *slog.Logger, rep *report.Report) {
+func logChanges(ctx context.Context, logger *slog.Logger, rep *report.Report) {
 	level := slog.LevelInfo
 	if rep.Added == 0 && rep.Removed == 0 {
 		level = slog.LevelDebug
 	}
-	logger.Log(context.Background(), level, "set updated",
+	logger.Log(ctx, level, "set updated",
 		"added", rep.Added,
 		"removed", rep.Removed,
 		"intervals", rep.IntervalsAfter,

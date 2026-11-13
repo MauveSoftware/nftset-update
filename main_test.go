@@ -265,3 +265,29 @@ func testConfig(t *testing.T, input *string) config {
 		update:     update.Config{BatchSize: 10, MaxRemoveFraction: 1},
 	}
 }
+
+func TestRunReportsCommittedState(t *testing.T) {
+	set := &fakeSet{current: []interval.Interval{mustParse(t, "10.0.0.1"), mustParse(t, "10.0.0.3")}}
+	cfg := testConfig(t, new("10.0.0.2\n10.0.0.3\n"))
+	open := func(nftables.TableFamily, string, string) (targetSet, func(), error) {
+		return set, func() {}, nil
+	}
+	var stdout bytes.Buffer
+
+	if code := run(context.Background(), cfg, open, &stdout, slog.New(slog.NewTextHandler(io.Discard, nil))); code != exitOK {
+		t.Fatalf("exit code = %d, want %d\n%s", code, exitOK, stdout.String())
+	}
+
+	var rep report.Report
+	if err := json.Unmarshal(stdout.Bytes(), &rep); err != nil {
+		t.Fatalf("report is not valid JSON: %v", err)
+	}
+	want := []interval.Interval{mustParse(t, "10.0.0.2"), mustParse(t, "10.0.0.3")}
+	if rep.IntervalsBefore != 2 || rep.IntervalsAfter != 2 || rep.InputIntervals != 2 {
+		t.Errorf("report intervals before/after/input = %d/%d/%d, want 2/2/2",
+			rep.IntervalsBefore, rep.IntervalsAfter, rep.InputIntervals)
+	}
+	if rep.ContentHash != interval.Hash(want) {
+		t.Errorf("report content_hash = %d, want hash of committed state %d", rep.ContentHash, interval.Hash(want))
+	}
+}

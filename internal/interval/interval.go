@@ -38,7 +38,8 @@ func lastInPrefix(addr netip.Addr, bits int) netip.Addr {
 	return last
 }
 
-// Parse parses "addr" or "from-to".
+// Parse parses "addr" or "from-to". Zoned addresses are rejected, as they
+// cannot be stored in a set.
 func Parse(s string) (Interval, error) {
 	fromStr, toStr, isRange := strings.Cut(s, "-")
 	from, err := netip.ParseAddr(fromStr)
@@ -50,6 +51,9 @@ func Parse(s string) (Interval, error) {
 		if to, err = netip.ParseAddr(toStr); err != nil {
 			return Interval{}, err
 		}
+	}
+	if from.Zone() != "" || to.Zone() != "" {
+		return Interval{}, fmt.Errorf("zoned address in %q", s)
 	}
 	if from.Is4() != to.Is4() {
 		return Interval{}, fmt.Errorf("mixed address families in %q", s)

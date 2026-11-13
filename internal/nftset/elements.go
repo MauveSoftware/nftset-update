@@ -49,7 +49,7 @@ func Decode(elems []nftables.SetElement, is6 bool) ([]interval.Interval, error) 
 	})
 
 	ivs := make([]interval.Interval, 0, len(sorted)/2)
-	var open *netip.Addr
+	var open netip.Addr // zero value: no interval open
 	for _, e := range sorted {
 		addr, err := keyToAddr(e.Key, is6)
 		if err != nil {
@@ -57,20 +57,20 @@ func Decode(elems []nftables.SetElement, is6 bool) ([]interval.Interval, error) 
 		}
 
 		if e.IntervalEnd {
-			if open != nil {
-				ivs = append(ivs, interval.Interval{From: *open, To: addr.Prev()})
-				open = nil
+			if open.IsValid() {
+				ivs = append(ivs, interval.Interval{From: open, To: addr.Prev()})
+				open = netip.Addr{}
 			}
 			continue
 		}
 
-		if open != nil {
+		if open.IsValid() {
 			return nil, fmt.Errorf("malformed interval set: start element %s follows start element %s without end element", addr, open)
 		}
-		open = &addr
+		open = addr
 	}
-	if open != nil {
-		ivs = append(ivs, interval.Interval{From: *open, To: interval.LastAddr(is6)})
+	if open.IsValid() {
+		ivs = append(ivs, interval.Interval{From: open, To: interval.LastAddr(is6)})
 	}
 	return ivs, nil
 }
